@@ -1,1 +1,92 @@
-  
+set.seed(3570)
+
+states <- c("U","I","M","F","A")
+
+P <- matrix(c(
+  0,   1/2, 1/2, 0,   0,
+  1/4, 0,   0,   1/2, 1/4,
+  3/4, 0,   0,   0,   1/4,
+  0,   0,   0,   1,   0,
+  0,   0,   0,   0,   1
+), nrow = 5, byrow = TRUE,
+dimnames = list(states, states))
+
+# simulate one chain using discrete inverse transform
+sim_one <- function(start) {
+  x <- start
+  T <- 0
+
+  while (!(x %in% c("F","A"))) {
+    u <- runif(1)
+    j <- which(u <= cumsum(P[x, ]))[1]
+    x <- states[j]
+    T <- T + 1
+  }
+
+  c(fate = x, T = T)
+}
+
+# simulate 10^4 chains
+sim_many <- function(start) {
+  out <- replicate(10000, sim_one(start))
+  data.frame(
+    fate = out["fate", ],
+    T = as.numeric(out["T", ])
+  )
+}
+
+U <- sim_many("U")
+I <- sim_many("I")
+M <- sim_many("M")
+
+# simulated estimates
+results <- function(dat) {
+  c(
+    h_hat = mean(dat$fate == "F"),
+    g_hat = mean(dat$T),
+    tauF_hat = mean(dat$T[dat$fate == "F"]),
+    tauA_hat = mean(dat$T[dat$fate == "A"])
+  )
+}
+
+rbind(
+  U = results(U),
+  I = results(I),
+  M = results(M)
+)
+
+Q <- P[c("U","I","M"), c("U","I","M")]
+R <- P[c("U","I","M"), c("F","A")]
+
+mpow <- function(A, n) {
+  if (n == 0) return(diag(nrow(A)))
+  out <- diag(nrow(A))
+  for (i in 1:n) out <- out %*% A
+  out
+}
+
+nvals <- 1:max(I$T)
+
+pmfF <- sapply(nvals, function(n)
+  (mpow(Q, n-1) %*% R)["I","F"] / (5/8))
+
+pmfA <- sapply(nvals, function(n)
+  (mpow(Q, n-1) %*% R)["I","A"] / (3/8))
+
+hist(I$T[I$fate=="F"],
+     breaks = seq(0.5, max(I$T)+0.5, 1),
+     probability = TRUE,
+     main = "T | Fold, Start = I",
+     xlab = "T")
+
+points(nvals, pmfF, type = "h", lwd = 2)
+points(nvals, pmfF, pch = 19)
+
+hist(I$T[I$fate=="A"],
+     breaks = seq(0.5, max(I$T)+0.5, 1),
+     probability = TRUE,
+     main = "T | Aggregate, Start = I",
+     xlab = "T")
+
+points(nvals, pmfA, type = "h", lwd = 2)
+points(nvals, pmfA, pch = 19)
