@@ -1,0 +1,222 @@
+
+# Homework 5
+
+# Question 1
+
+makeP <- function(a, b) {
+  P <- matrix(0, 5, 5)
+
+  for (k in 0:4) {
+    if (k < 4) P[k+1, k+2] <- a*(4-k)/4
+    if (k > 0) P[k+1, k] <- b*k/4
+    P[k+1, k+1] <- 1 - sum(P[k+1, ])
+  }
+
+  P
+}
+
+# 1b
+P1 <- makeP(1, 1)
+
+q1 <- matrix(0, 61, 5)
+q1[1, 1] <- 1
+
+for (n in 1:60) {
+  q1[n+1, ] <- q1[n, ] %*% P1
+}
+
+print(q1[51, ])  # q50
+print(q1[52, ])  # q51
+
+
+# 1c
+P2 <- makeP(0.3, 0.1)
+
+A <- t(P2) - diag(5)
+A[5, ] <- 1
+
+pi1 <- as.vector(solve(A, c(0, 0, 0, 0, 1)))
+
+print(pi1)
+print(dbinom(0:4, 4, 0.75))
+
+q2 <- matrix(0, 201, 5)
+q2[1, 1] <- 1
+
+for (n in 1:200) {
+  q2[n+1, ] <- q2[n, ] %*% P2
+}
+
+error <- apply(abs(sweep(q2, 2, pi1)), 1, max)
+
+print(which(error < 1e-6)[1] - 1)
+print(sort(Mod(eigen(P2)$values), decreasing=TRUE)[2])
+
+
+# Question 1 plots
+par(mfrow=c(1, 2))
+
+avg <- cumsum(q1[,3])/(1:61)
+
+matplot(0:60, cbind(q1[,3], q1[,5], avg),
+        type="l", lty=1, col=1:3,
+        xlab="n", ylab="Probability",
+        main="a = b = 1")
+
+legend("topright",
+       c("q(2)", "q(4)", "Running average"),
+       col=1:3, lty=1, cex=0.8)
+
+matplot(0:60, q2[1:61, ],
+        type="l", lty=1, col=1:5,
+        xlab="n", ylab="Probability",
+        main="a = 0.3, b = 0.1")
+
+legend("right", paste("k =", 0:4),
+       col=1:5, lty=1, cex=0.8)
+
+par(mfrow=c(1, 1))
+
+
+# Question 3a
+
+# Create transition matrix
+P <- matrix(0, 8, 8)
+
+links <- list(
+  c(2,3),
+  c(3,4),
+  c(1,5),
+  c(1,3,5),
+  c(2,6,7),
+  6,
+  8,
+  7
+)
+
+for (i in 1:8) {
+  P[i, links[[i]]] <- 1/length(links[[i]])
+}
+
+print(P)
+
+# Find q100 and q101
+q <- rep(1/8, 8)
+
+for (n in 1:101) {
+  q <- as.vector(q %*% P)
+
+  if (n == 100) {
+    q100 <- q
+  }
+}
+
+print(q100)
+print(q)  # q101
+
+
+# Question 3b
+
+d <- 0.85
+G <- d*P + (1-d)/8
+
+# Power iteration
+q <- rep(1/8, 8)
+n <- 0
+
+repeat {
+  qnew <- as.vector(q %*% G)
+  n <- n + 1
+
+  if (sum(abs(qnew-q)) < 1e-10) break
+
+  q <- qnew
+}
+
+pi <- qnew
+
+print(n)
+print(pi)
+
+# Check with linear solve
+A <- t(G) - diag(8)
+A[8, ] <- 1
+
+pi_check <- solve(A, c(rep(0, 7), 1))
+print(pi_check)
+
+# Page ranking
+print(order(-pi))
+
+
+# Question 3c
+
+set.seed(3570)
+
+R <- 100
+T <- 100000
+
+# Start all surfers at page 1
+x <- rep(1, R)
+counts <- matrix(0, R, 8)
+
+# Cumulative probabilities
+cdf <- t(apply(G, 1, cumsum))
+
+times <- unique(round(10^seq(2, 5, length.out=35)))
+errors <- numeric(length(times))
+j <- 1
+
+# Simulate surfers
+for (t in 1:T) {
+
+  u <- runif(R)
+
+  # Discrete inverse transform
+  x <- 1 + rowSums(u > cdf[x, , drop=FALSE])
+
+  # Count visits
+  idx <- cbind(1:R, x)
+  counts[idx] <- counts[idx] + 1
+
+  if (j <= length(times) && t == times[j]) {
+
+    estimates <- counts/t
+    diff <- abs(sweep(estimates, 2, pi))
+
+    errors[j] <- sqrt(mean(apply(diff, 1, max)^2))
+    j <- j + 1
+  }
+}
+
+# Simulated vs exact PageRank plot
+barplot(
+  rbind(counts[1,]/T, pi),
+  beside=TRUE,
+  names.arg=1:8,
+  col=c("gray60", "steelblue"),
+  legend.text=c("Surfer", "Exact"),
+  xlab="Page",
+  ylab="Probability",
+  main="Simulated vs Exact PageRank"
+)
+
+# Error over time plot
+fit <- lm(log(errors) ~ log(times))
+slope <- coef(fit)[2]
+
+plot(times, errors, log="xy",
+     xlab="T",
+     ylab="RMS maximum error",
+     main="Simulation Error")
+
+lines(times,
+      exp(coef(fit)[1])*times^slope,
+      col="red", lwd=2)
+
+# Fitted slope
+print(slope)
+
+# Final error comp
+print(tail(errors, 1))
+print(sqrt(pi[6]*(1-pi[6])/T))
