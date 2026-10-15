@@ -1,0 +1,205 @@
+
+# Homework 6
+
+# 1c
+results1 <- data.frame()
+
+for (m in 3:12) {
+  P <- matrix(0, m, m)
+  for (i in 1:(m-1)) P[i, i+1] <- 1
+  P[m, 1] <- 1/2
+  P[m, 2] <- 1/2
+
+  B <- diag(m)
+  links <- 1 * (P > 0)
+  for (n in 1:200) {
+    B <- 1 * (B %*% links > 0)
+    if (all(B > 0)) break
+  }
+
+  eig <- sort(Mod(eigen(P)$values), decreasing=TRUE)
+  results1 <- rbind(results1, data.frame(
+    m=m, M=n, bound=(m-1)^2+1, lambda2=eig[2]
+  ))
+}
+print(results1)
+
+
+# 2c
+
+games <- read.csv("big12.csv", stringsAsFactors=FALSE)
+teams <- sort(unique(c(games$home[games$season==2026],
+                       games$away[games$season==2026])))
+m <- length(teams)
+w <- 1
+
+old <- subset(games, season==2025 & completed==1)
+played <- subset(games, season==2026 & completed==1 & date<"2026-10-10")
+weekend <- subset(games, season==2026 & date>="2026-10-10" & date<="2026-10-11")
+
+# Keener score for a game
+h <- function(S, T) {
+  x <- (S+1)/(S+T+2)
+  1/2 + sign(x-1/2)*sqrt(abs(2*x-1))/2
+}
+
+# Flat prior
+flat <- matrix(0.5, m, m)
+diag(flat) <- 0
+
+# 2025 head-to-head prior
+last <- flat
+for (i in 1:(m-1)) {
+  for (j in (i+1):m) {
+    scores <- numeric(0)
+    for (k in 1:nrow(old)) {
+      g <- old[k, ]
+      if (g$home==teams[i] && g$away==teams[j])
+        scores <- c(scores, h(g$home_pts, g$away_pts))
+      if (g$away==teams[i] && g$home==teams[j])
+        scores <- c(scores, h(g$away_pts, g$home_pts))
+    }
+    if (length(scores)>0) last[i,j] <- mean(scores)
+    last[j,i] <- 1-last[i,j]
+  }
+}
+
+# Own prior: 2025 wins + 1
+s <- rep(1, m)
+for (k in 1:nrow(old)) {
+  g <- old[k, ]
+  winner <- if (g$home_pts > g$away_pts) g$home else g$away
+  s[match(winner, teams)] <- s[match(winner, teams)] + 1
+}
+own <- outer(s, s, function(x,y) x/(x+y))
+diag(own) <- 0
+
+priors <- list(Flat=flat, Last_Season=last, Wins_2025=own)
+ranks <- matrix(0, m, 3, dimnames=list(teams, names(priors)))
+info <- data.frame()
+
+for (v in 1:3) {
+  A <- w*priors[[v]]
+  count <- rep(0, m)
+
+  for (k in 1:nrow(played)) {
+    g <- played[k, ]
+    i <- match(g$home, teams)
+    j <- match(g$away, teams)
+    A[i,j] <- A[i,j] + h(g$home_pts, g$away_pts)
+    A[j,i] <- A[j,i] + h(g$away_pts, g$home_pts)
+    count[c(i,j)] <- count[c(i,j)] + 1
+  }
+
+  A <- sweep(A, 1, count+w*(m-1), "/")
+
+  # Power iteration
+  r <- rep(1/m, m)
+  for (t in 1:10000) {
+    rnew <- as.vector(A %*% r)
+    rnew <- rnew/sum(rnew)
+    if (max(abs(rnew-r)) < 1e-12) break
+    r <- rnew
+  }
+  ranks[,v] <- rnew
+
+  eig <- sort(Mod(eigen(A)$values), decreasing=TRUE)
+  info <- rbind(info, data.frame(
+    prior=names(priors)[v], lambda=eig[1], ratio=eig[2]/eig[1]
+  ))
+}
+
+print(info)
+print(round(ranks, 5))
+for (v in 1:3) {
+  cat("\nRanking:", names(priors)[v], "\n")
+  print(teams[order(-ranks[,v])])
+}
+
+# Ranking bar charts
+par(mfrow=c(3,1), mar=c(8,4,3,1))
+for (v in 1:3) {
+  order_v <- order(ranks[,v], decreasing=TRUE)
+  barplot(ranks[order_v,v], names.arg=teams[order_v], las=2,
+          cex.names=0.7, main=names(priors)[v], ylab="Rank score")
+}
+dev.off()
+
+# October 10-11 predictions
+pred <- data.frame(home=weekend$home, away=weekend$away)
+for (v in 1:3) {
+  pred[[names(priors)[v]]] <- ifelse(
+    ranks[match(weekend$home, teams),v] >= ranks[match(weekend$away, teams),v],
+    weekend$home, weekend$away
+  )
+}
+print(pred)
+
+# 3c
+h1 <- function(N, R0) {
+  K <- N/10
+  rho <- 1
+  total <- 1
+  for (k in 1:(K-1)) {
+    rho <- rho*N/(R0*(N-k))
+    total <- total+rho
+  }
+  1/total
+}
+
+r0 <- seq(0.5, 3, length.out=300)
+h100 <- sapply(r0, function(x) h1(100,x))
+h1000 <- sapply(r0, function(x) h1(1000,x))
+
+plot(r0, h100, type="l", lwd=2, ylim=c(-1,1),
+     xlab="R0", ylab="h1", main="Outbreak probability")
+lines(r0, h1000, lwd=2, lty=2)
+lines(r0, 1-1/r0, lwd=2, lty=3)
+legend("bottomright", c("N=100", "N=1000", "1 - 1/R0"),
+       lty=1:3, lwd=2)
+dev.off()
+
+
+# 3d
+N <- 100
+K <- 10
+dt <- 0.005
+r0s <- c(0.5, 0.8, 1.5, 3)
+times <- numeric(length(r0s))
+
+for (v in 1:length(r0s)) {
+  n <- 1:(K-1)
+  p <- r0s[v]*n*(N-n)/N*dt
+  q <- n*dt
+
+  A <- diag(p+q)
+  for (i in 1:(K-1)) {
+    if (i>1) A[i,i-1] <- -q[i]
+    if (i<K-1) A[i,i+1] <- -p[i]
+  }
+
+  e <- solve(A, rep(1,K-1))
+  times[v] <- e[1]*dt
+}
+print(data.frame(R0=r0s, e1_dt=times))
+
+# Simulation check for R0=0.8
+set.seed(3570)
+R <- 10000
+x <- rep(1, R)
+steps <- numeric(R)
+R0 <- 0.8
+
+while (any(x>0 & x<K)) {
+  active <- which(x>0 & x<K)
+  n <- x[active]
+  p <- R0*n*(N-n)/N*dt
+  q <- n*dt
+  u <- runif(length(active))
+
+  x[active] <- n + (u<p) - (u>=p & u<p+q)
+  steps[active] <- steps[active]+1
+}
+
+cat("Simulated e1*dt:", mean(steps)*dt, "\n")
+cat("Exact e1*dt:", times[2], "\n")
