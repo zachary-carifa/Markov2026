@@ -1,0 +1,268 @@
+
+# Homework 7
+set.seed(3570)
+
+# 1c: Lighthouse MCMC
+x <- c(-1.77, 2.47, 1.34, 2.18, 13.05, 1.60, 1.50, -1.97,
+       0.79, 1.50, 2.00, 2.63, 1.19, -2.31, 0.87)
+
+logpost <- function(a, b) {
+  length(x)*b - sum(log(exp(2*b) + (x-a)^2))
+}
+
+iat <- function(v) {
+  a <- as.numeric(acf(v, plot=FALSE, lag.max=5000)$acf)[-1]
+  pairs <- a[seq(1, length(a)-1, by=2)] + a[seq(2, length(a), by=2)]
+  stopat <- which(pairs <= 0)
+  if (length(stopat) > 0) pairs <- head(pairs, stopat[1]-1)
+  1 + 2*sum(pairs)
+}
+
+stepsizes <- c(0.02, 0.5, 5)
+chains <- vector("list", 3)
+accept <- numeric(3)
+tau <- numeric(3)
+
+for (j in 1:3) {
+  z <- c(0, 0)
+  chain <- matrix(0, 50000, 2)
+  count <- 0
+  for (t in 1:50000) {
+    y <- z + rnorm(2, sd=stepsizes[j])
+    if (log(runif(1)) < logpost(y[1], y[2]) - logpost(z[1], z[2])) {
+      z <- y
+      count <- count + 1
+    }
+    chain[t, ] <- z
+  }
+  chains[[j]] <- chain
+  accept[j] <- count/50000
+  tau[j] <- iat(chain[,1])
+}
+print(data.frame(step=stepsizes, acceptance=accept, IAT_alpha=tau))
+
+par(mfrow=c(3,1))
+for (j in 1:3) {
+  plot(1:400, chains[[j]][1:400,1], type="l", xlab="Step",
+       ylab="alpha", main=paste("Step size", stepsizes[j]))
+}
+par(mfrow=c(1,1))
+dev.off()
+
+# Grid posterior and MCMC intervals
+agrid <- seq(-6, 9, length.out=601)
+bgrid <- seq(-5, 3.5, length.out=501)
+diff2 <- outer(agrid, x, "-")^2
+lg <- sapply(bgrid, function(b) length(x)*b - rowSums(log(exp(2*b)+diff2)))
+weight <- exp(lg-max(lg))
+weight <- weight/sum(weight)
+wa <- rowSums(weight)
+wb <- colSums(weight)
+
+wquant <- function(values, weights, probs) {
+  approx(c(0, cumsum(weights)), c(values[1], values), xout=probs)$y
+}
+
+best <- which.min(tau)
+post <- chains[[best]][5001:50000, ]
+postbeta <- exp(post[,2])
+
+summary1 <- data.frame(
+  parameter=c("alpha", "beta"),
+  chain_mean=c(mean(post[,1]), mean(postbeta)),
+  chain_5=c(quantile(post[,1], 0.05), quantile(postbeta, 0.05)),
+  chain_95=c(quantile(post[,1], 0.95), quantile(postbeta, 0.95)),
+  grid_mean=c(sum(agrid*wa), sum(exp(bgrid)*wb)),
+  grid_5=c(wquant(agrid, wa, 0.05), wquant(exp(bgrid), wb, 0.05)),
+  grid_95=c(wquant(agrid, wa, 0.95), wquant(exp(bgrid), wb, 0.95))
+)
+cat("Best step size:", stepsizes[best], "\n")
+print(summary1)
+cat("Data mean:", mean(x), "Data median:", median(x), "\n")
+
+contour(agrid, bgrid, exp(lg-max(lg)), nlevels=12,
+        xlab="alpha", ylab="log(beta)", main="Lighthouse posterior")
+plotrows <- seq(1, nrow(post), by=15)
+points(post[plotrows,1], post[plotrows,2], pch=16, cex=0.25,
+       col=rgb(0.8,0,0,0.13))
+dev.off()
+
+
+# 1d: Cauchy means and medians
+scatter <- data.frame()
+for (n in c(10, 100, 1000)) {
+  samples <- matrix(1.5 + 0.8*rcauchy(2000*n), nrow=2000)
+  estimates_mean <- rowMeans(samples)
+  estimates_median <- apply(samples, 1, median)
+  scatter <- rbind(scatter, data.frame(
+    n=n, mean_scatter=IQR(estimates_mean)/1.349,
+    median_scatter=IQR(estimates_median)/1.349
+  ))
+}
+print(scatter)
+
+
+# 2d: Exponential finishing times
+rates <- c(3, 2, 1.5, 1.2, 1, 0.75)
+
+# Follow all subsets of students still working
+finish_group <- function(lam) {
+  n <- length(lam)
+  E <- numeric(2^n)
+  last <- matrix(0, 2^n, n)
+  bits <- bitwShiftL(1L, 0:(n-1))
+  for (mask in 1:(2^n-1)) {
+    students <- which(bitwAnd(mask, bits) != 0)
+    total <- sum(lam[students])
+    E[mask+1] <- 1/total
+    if (length(students)==1) last[mask+1,students] <- 1
+    for (i in students) {
+      smaller <- mask-bits[i]
+      E[mask+1] <- E[mask+1]+lam[i]/total*E[smaller+1]
+      if (length(students)>1)
+        last[mask+1,] <- last[mask+1,]+lam[i]/total*last[smaller+1,]
+    }
+  }
+  list(mean=E[2^n], last=last[2^n,])
+}
+
+# Alternating sum over nonempty groups
+alternate <- function(lam) {
+  n <- length(lam)
+  bits <- bitwShiftL(1L, 0:(n-1))
+  total <- 0
+  for (mask in 1:(2^n-1)) {
+    students <- which(bitwAnd(mask, bits) != 0)
+    total <- total+(-1)^(length(students)+1)/sum(lam[students])
+  }
+  total
+}
+
+exact <- finish_group(rates)
+cat("Exact mean from groups:", exact$mean, "\n")
+cat("Exact mean from alternating sum:", alternate(rates), "\n")
+print(data.frame(student=1:6, last_probability=exact$last))
+
+# Simulate exams
+nsim <- 200000
+exam <- matrix(rexp(nsim*6, rate=rep(rates, each=nsim)), ncol=6)
+M <- apply(exam, 1, max)
+firsttime <- apply(exam, 1, min)
+first <- max.col(-exam, ties.method="first")
+last <- max.col(exam, ties.method="first")
+cat("Simulated mean M:", mean(M), "\n")
+print(data.frame(student=1:6, simulated_last=tabulate(last, 6)/nsim,
+                 first_time_by_winner=as.numeric(tapply(firsttime, first, mean))))
+cat("Exact mean first finish:", 1/sum(rates), "\n")
+
+# Exact density of the last finishing time
+pdfM <- function(times) {
+  sapply(times, function(t) {
+    sum(sapply(1:6, function(i) {
+      rates[i]*exp(-rates[i]*t)*prod(1-exp(-rates[-i]*t))
+    }))
+  })
+}
+
+hist(M, breaks=65, probability=TRUE, xlab="Hours", main="Last student to finish")
+times <- seq(0, max(M), length.out=500)
+lines(times, pdfM(times), col="red", lwd=2)
+dev.off()
+
+# Rates 1, 2, ..., k
+means_k <- sapply(1:12, function(k) alternate(1:k))
+print(data.frame(k=1:12, expected_last_time=means_k))
+plot(1:12, means_k, type="b", xlab="Number of students k",
+     ylab="E[M]", main="Rates 1 through k")
+abline(h=2*log(2), lty=2)
+dev.off()
+
+
+# 3d: Meteor shower simulations
+hours <- 200000
+rate <- 4
+
+# Method 1: exponential gaps
+clock <- numeric(hours)
+Ng <- integer(hours)
+H1g <- integer(hours)
+raster_g <- replicate(10, numeric(0), simplify=FALSE)
+step <- 0
+repeat {
+  step <- step+1
+  clock <- clock+rexp(hours, rate)
+  if (step==1) T1g <- clock
+  if (step==3) T3g <- clock
+  inside <- clock<=1
+  Ng <- Ng+as.integer(inside)
+  H1g <- H1g+as.integer(inside & clock<=0.5)
+  for (i in 1:10) if (inside[i]) raster_g[[i]] <- c(raster_g[[i]], clock[i])
+  if (step>=3 && !any(inside)) break
+}
+
+# Method 2: Poisson count and uniform event times
+Nu <- rpois(hours, 4)
+index <- rep(seq_len(hours), Nu)
+arrival <- runif(length(index))
+H1u <- tabulate(index[arrival<=0.5], nbins=hours)
+starts <- c(0, cumsum(Nu))
+ids3 <- which(Nu==3)
+off <- starts[ids3]+1
+T1u3 <- pmin(arrival[off], arrival[off+1], arrival[off+2])
+raster_u <- lapply(1:10, function(i) {
+  if (Nu[i]==0) numeric(0) else sort(arrival[(starts[i]+1):starts[i+1]])
+})
+
+print(data.frame(method=c("Gaps", "Poisson + uniform"),
+                 mean=c(mean(Ng), mean(Nu)),
+                 variance=c(var(Ng), var(Nu)),
+                 p_no_first_half_given_3=c(mean(H1g[Ng==3]==0), mean(H1u[Nu==3]==0)),
+                 mean_first_given_3=c(mean(T1g[Ng==3]), mean(T1u3)),
+                 half_count_correlation=c(cor(H1g, Ng-H1g), cor(H1u, Nu-H1u))))
+
+par(mfrow=c(1,2))
+for (method in 1:2) {
+  counts <- if (method==1) Ng else Nu
+  k <- 0:max(counts)
+  height <- as.numeric(table(factor(counts, levels=k)))/hours
+  pos <- barplot(height, names.arg=k, xlab="N(1)", ylab="Probability",
+                 main=if (method==1) "Gaps" else "Poisson + uniform")
+  points(pos, dpois(k, 4), pch=19, col="red", cex=0.65)
+}
+par(mfrow=c(1,1))
+dev.off()
+
+par(mfrow=c(2,1))
+for (method in 1:2) {
+  events <- if (method==1) raster_g else raster_u
+  plot(0, 0, type="n", xlim=c(0,1), ylim=c(0.5,10.5),
+       xlab="Time (hours)", ylab="Hour", yaxt="n",
+       main=if (method==1) "Exponential gaps" else "Poisson + uniform")
+  axis(2, at=1:10)
+  for (i in 1:10) {
+    if (length(events[[i]])>0)
+      segments(events[[i]], i-0.35, events[[i]], i+0.35)
+  }
+}
+par(mfrow=c(1,1))
+dev.off()
+
+hist(T3g, breaks=65, probability=TRUE, xlab="T3 (hours)",
+     main="Third meteor arrival")
+curve(dgamma(x, shape=3, rate=4), add=TRUE, col="red", lwd=2)
+dev.off()
+
+# Total variation distance as delta t decreases
+a <- 10:2000
+dt <- 1/a
+tv <- sapply(a, function(m) {
+  k <- 0:m
+  0.5*(sum(abs(dbinom(k,m,4/m)-dpois(k,4))) +
+       ppois(m,4,lower.tail=FALSE))
+})
+fit <- lm(log(tv) ~ log(dt))
+cat("Log-log total variation slope:", coef(fit)[2], "\n")
+plot(dt, tv, log="xy", xlab="Delta t", ylab="Total variation distance",
+     main="Binomial versus Poisson")
+lines(dt, exp(coef(fit)[1])*dt^coef(fit)[2], col="red", lwd=2)
+dev.off()
