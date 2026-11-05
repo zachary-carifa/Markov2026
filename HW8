@@ -1,0 +1,200 @@
+# Problem 2c - Photon Detector
+
+set.seed(3570)
+N <- 200000
+
+# Method 1 - Thinning
+star_thin <- rbinom(N, rpois(N, 15), 0.4)
+sky_thin <- rbinom(N, rpois(N, 10), 0.4)
+
+# Method 2 - Direct
+star_direct <- rpois(N, 6)
+sky_direct <- rpois(N, 4)
+
+# Calculate count statistics
+count_stats <- function(star, sky) {
+  total <- star + sky
+
+  c(
+    star_mean = mean(star),
+    star_variance = var(star),
+    sky_mean = mean(sky),
+    sky_variance = var(sky),
+    total_mean = mean(total),
+    total_variance = var(total),
+    star_sky_correlation = cor(star, sky),
+    prob_6_star_given_10 = mean(star[total == 10] == 6)
+  )
+}
+
+results <- rbind(
+  Thinning = count_stats(star_thin, sky_thin),
+  Direct = count_stats(star_direct, sky_direct)
+)
+
+cat("\nProblem 2c - Photon Count Results\n")
+print(round(results, 6))
+
+# Plot total counts against Poisson(10)
+total_thin <- star_thin + sky_thin
+total_direct <- star_direct + sky_direct
+
+k <- 0:max(total_thin, total_direct)
+
+png("hw8_photon_counts.png", width=1000, height=550)
+par(mfrow=c(1, 2))
+
+for (method in 1:2) {
+  total <- if (method == 1) total_thin else total_direct
+  probs <- tabulate(total + 1, nbins=length(k)) / N
+
+  bars <- barplot(
+    probs,
+    names.arg = k,
+    main = if (method == 1) "Thinning" else "Direct",
+    xlab = "Total detections",
+    ylab = "Probability"
+  )
+
+  points(bars, dpois(k, 10), col = "red", pch = 19)
+}
+
+par(mfrow=c(1,1))
+dev.off()
+
+# First detection times
+first_star <- rexp(N, rate = 1.2)
+first_sky <- rexp(N, rate = 0.8)
+
+first_time <- pmin(first_star, first_sky)
+star_first <- as.integer(first_star < first_sky)
+M <- pmax(first_star, first_sky)
+
+first_results <- c(
+  prob_star_first = mean(star_first),
+  prob_star_first_within_1s = mean(star_first == 1 & first_time <= 1),
+  mean_time_both = mean(M),
+  time_type_correlation = cor(first_time, star_first)
+)
+
+cat("\nProblem 2c - First Detection Results\n")
+print(round(first_results, 6))
+
+# Plot first detection times
+png("hw8_photon_first_times.png", width=1000, height=550)
+par(mfrow=c(1, 2))
+
+hist(first_star, breaks = 80, probability = TRUE,
+     main = "First star detection",
+     xlab = "Time (seconds)", xlim = c(0, 6))
+curve(dexp(x, rate = 1.2), add = TRUE, col = "red", lwd = 2)
+
+hist(first_sky, breaks = 80, probability = TRUE,
+     main = "First sky detection",
+     xlab = "Time (seconds)", xlim = c(0, 8))
+curve(dexp(x, rate = 0.8), add = TRUE, col = "red", lwd = 2)
+
+par(mfrow=c(1,1))
+dev.off()
+
+# Problem 3c 
+
+set.seed(3570)
+T <- 720
+
+rate <- function(t) {
+  12 + 8*cos(pi*(t - 16)/12)
+}
+
+# Generate arrivals using thinning
+proposed <- rpois(1, 20 * T)
+times <- runif(proposed, 0, T)
+kept <- times[runif(proposed) < rate(times)/20]
+
+cat("\nProblem 3c - Thinning Results\n")
+cat("Proposed arrivals:", proposed, "\n")
+cat("Kept arrivals:", length(kept), "\n")
+cat("Fraction kept:", length(kept)/proposed, "\n")
+
+# Count arrivals in each hour of each day
+day <- floor(kept / 24)
+hour <- floor(kept %% 24)
+
+counts <- matrix(
+  tabulate(day * 24 + hour + 1, nbins = 720),
+  nrow = 30, ncol = 24, byrow = TRUE
+)
+
+hour_means <- colMeans(counts)
+
+# Arrivals from 3 to 4 am
+three_am <- counts[, 4]
+
+cat("\nProblem 3c - Arrivals from 3 to 4 AM\n")
+cat("Simulated mean:", mean(three_am), "\n")
+cat("Simulated variance:", var(three_am), "\n")
+cat("Theoretical mean and variance:", 12 - 96/pi*sin(pi/12), "\n")
+
+# Plot average hourly arrivals
+png("hw8_er_hourly.png", width = 900, height = 550)
+
+plot((0:23) + 0.5, hour_means,
+     pch = 19, xlim = c(0, 24), ylim = c(0, 24),
+     xlab = "Hour after midnight",
+     ylab = "Average arrivals per hour",
+     main = "ER arrivals over 30 days")
+
+curve(rate(x), from = 0, to = 24,
+      add = TRUE, col = "red", lwd = 2)
+
+legend("topright",
+       c("Simulation", "True rate"),
+       col = c("black", "red"),
+       pch = c(19, NA), lty = c(NA, 1))
+
+dev.off()
+
+# Fit sinusoidal rate using maximum likelihood
+negloglik <- function(par) {
+  a <- par[1]
+  b <- par[2]
+  phi <- par[3]
+
+  if (a <= abs(b) || a <= 0) return(1e12)
+
+  intensity <- a + b*cos(pi*(kept - phi)/12)
+
+  T * a - sum(log(intensity))
+}
+
+fit <- optim(
+  c(10, 5, 14),
+  negloglik,
+  method = "Nelder-Mead",
+  control = list(maxit = 10000)
+)
+
+est <- fit$par
+
+if (est[2] < 0) {
+  est[2] <- -est[2]
+  est[3] <- est[3] + 12
+}
+
+est[3] <- est[3] %% 24
+names(est) <- c("a", "b", "phi")
+
+# Compare with constant-rate model
+n <- length(kept)
+
+constant_rate <- n / T
+constant_ll <- n * log(constant_rate) - n
+sinusoidal_ll <- -fit$value
+
+cat("\nProblem 3c - Maximum Likelihood Estimates\n")
+print(est)
+
+cat("Sinusoidal log-likelihood:", sinusoidal_ll, "\n")
+cat("Constant log-likelihood:", constant_ll, "\n")
+cat("Log-likelihood difference:", sinusoidal_ll - constant_ll, "\n")
+cat("Convergence code:", fit$convergence, "\n")
