@@ -1,0 +1,155 @@
+
+# Problem 3(c)
+
+Q <- matrix(c(
+  -2,  2,  0,  0,
+   1, -3,  2,  0,
+   0,  2, -4,  2,
+   0,  0,  3, -3
+), nrow = 4, byrow = TRUE)
+
+pi <- c(3, 6, 6, 4) / 19
+x0 <- c(1, 0, 0, 0)
+
+print(Q)
+print(pi)
+print(x0)
+
+eig <- eigen(Q)
+
+eigenvalues <- sort(
+  Re(eig$values),
+  decreasing = TRUE
+)
+
+lambda2 <- eigenvalues[2]
+
+cat("Eigenvalues:\n")
+print(eigenvalues)
+
+cat("Trace of Q:", sum(diag(Q)), "\n")
+cat("Sum of eigenvalues:", sum(eigenvalues), "\n")
+cat("Lambda 2:", lambda2, "\n")
+
+V <- eig$vectors
+V_inv <- solve(V)
+
+P_t <- function(t) {
+  Re(
+    V %*%
+      diag(exp(eig$values * t), nrow = 4) %*%
+      V_inv
+  )
+}
+
+x_t <- function(t) {
+  as.numeric(x0 %*% P_t(t))
+}
+
+TV <- function(t) {
+  0.5 * sum(abs(x_t(t) - pi))
+}
+
+times <- seq(0, 5, by = 0.01)
+
+state_probs <- t(sapply(times, x_t))
+TV_values <- sapply(times, TV)
+
+check_times <- c(0, 1, 2, 3, 5)
+
+results <- data.frame(
+  Time = check_times,
+  TV = sapply(check_times, TV)
+)
+
+print(results, row.names = FALSE)
+
+png(
+  "hw9_state_probabilities.png",
+  width = 1000,
+  height = 650,
+  res = 120
+)
+
+matplot(
+  times,
+  state_probs,
+  type = "l",
+  lty = 1,
+  lwd = 2,
+  col = 1:4,
+  xlab = "Time (hours)",
+  ylab = "Probability",
+  main = "State Probabilities Over Time",
+  ylim = c(0, 1)
+)
+
+abline(h = pi, col = 1:4, lty = 3)
+
+legend(
+  "topright",
+  legend = c("State 0", "State 1", "State 2", "State 3"),
+  col = 1:4,
+  lty = 1,
+  lwd = 2,
+  bty = "n"
+)
+
+dev.off()
+
+reference_line <- TV(3) * exp(lambda2 * (times - 3))
+
+png(
+  "hw9_tv_log.png",
+  width = 1000,
+  height = 650,
+  res = 120
+)
+
+plot(
+  times,
+  TV_values,
+  type = "l",
+  log = "y",
+  lwd = 2,
+  col = "blue",
+  xlab = "Time (hours)",
+  ylab = "Total Variation Distance (log scale)",
+  main = "Convergence in Total Variation"
+)
+
+lines(
+  times,
+  reference_line,
+  col = "red",
+  lwd = 2,
+  lty = 2
+)
+
+abline(h = 0.01, col = "darkgray", lty = 3)
+
+legend(
+  "topright",
+  legend = c("TV(t)", "Reference slope lambda2", "TV = 0.01"),
+  col = c("blue", "red", "darkgray"),
+  lty = c(1, 2, 3),
+  lwd = c(2, 2, 1),
+  bty = "n"
+)
+
+dev.off()
+
+t_actual <- uniroot(
+  function(t) TV(t) - 0.01,
+  interval = c(0, 5),
+  tol = 1e-11
+)$root
+
+t_estimate <- log(100) / abs(lambda2)
+
+difference <- t_estimate - t_actual
+
+cat(sprintf("Lambda 2: %.6f\n", lambda2))
+cat(sprintf("Actual TV = 0.01 time: %.6f hours\n", t_actual))
+cat(sprintf("Eigenvalue estimate: %.6f hours\n", t_estimate))
+cat(sprintf("Difference: %.6f hours\n", difference))
